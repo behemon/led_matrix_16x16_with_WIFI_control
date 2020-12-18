@@ -1,0 +1,165 @@
+// libs
+
+#include <ESP8266WiFi.h>          //https://github.com/esp8266/Arduino
+
+//needed for library
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
+#include "WiFiManager.h"         //https://github.com/tzapu/WiFiManager
+
+#include <SPI.h>
+#include <SD.h>
+#include <Adafruit_NeoPixel.h>
+#include "FastLED.h"
+
+#include "Plasma.cpp"
+#include "Spiral.cpp"
+
+// Set web server port number to 80
+WiFiServer server(80);
+
+// globals
+String inString = "";    // string to hold input
+
+#define DATA_PIN D0
+
+#define WIDTH 8
+#define HEIGHT 8
+#define NUM_LEDS WIDTH * HEIGHT
+#define BRIGHTNESS    10
+#define FRAMES_PER_SECOND  120
+
+CRGB leds[NUM_LEDS];
+
+// Bee animation
+#include "imgBee1.c"  // Bee1
+const byte *gBeeFrames[3] = { bee1, bee2 };
+void showBee1();
+
+int tmpIndexI = 0;
+int tmpIndexJ = 0;
+
+const uint8_t kMatrixWidth  = 16;
+const uint8_t kMatrixHeight = 16;
+uint8_t gCurrentPatternNumber = 0; // Index number of which pattern is current
+uint8_t gHue = 0; // rotating "base color" used by many of the patterns
+int gCurrentFrameNumber = 0;
+
+void setup()
+{
+  Serial.begin(115200);
+  Serial.println();
+  
+  WiFiManager wifiManager;
+
+    wifiManager.autoConnect();
+//
+//  if (!SD.begin(10)) {
+//    Serial.println("SD Card Failed!"); 
+//  return;}
+//  Serial.println("SD Card Loaded");
+
+
+  //    FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, NUM_LEDS);
+    FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
+    FastLED.setBrightness(BRIGHTNESS);
+}
+
+void loop() {
+      WiFiClient client = server.available();   // Listen for incoming clients
+      
+//      doPlasma();
+      doSpiral();
+  
+//  showBee1();
+
+}
+
+// convert bitmap to x/y coordinates
+uint16_t getImgX(uint16_t index) {
+  return index % kMatrixWidth;
+}
+uint16_t getImgY(uint16_t index) {
+  return (kMatrixWidth - (index / kMatrixWidth) - 1);
+}
+
+// convert x/y cordinates to LED index on zig-zag grid
+uint16_t getIndex(uint16_t x, uint16_t y) {
+  uint16_t index;
+  if (y == 0) {
+    index = x;
+  } else if (y % 2 == 0) {
+    index = y * kMatrixWidth + x;
+  } else {
+    index = ((y * kMatrixWidth) + (kMatrixWidth-1)) - x;
+  }
+  return index;
+}
+
+void nextFrame(int count) {
+  // add one to the current pattern number, and wrap around at the end
+  gCurrentFrameNumber = (gCurrentFrameNumber + 1) % count;
+}
+
+void showBee1() {
+  tmpIndexJ = 0;
+  EVERY_N_MILLISECONDS( 200 ) {  // 200ms frame change
+    for (tmpIndexI=0;tmpIndexI<768;tmpIndexI=tmpIndexI+3) {
+      leds[getIndex(getImgX(tmpIndexJ),getImgY(tmpIndexJ))].r = pgm_read_byte_near(gBeeFrames[gCurrentFrameNumber] + tmpIndexI);
+      leds[getIndex(getImgX(tmpIndexJ),getImgY(tmpIndexJ))].g = pgm_read_byte_near(gBeeFrames[gCurrentFrameNumber] + tmpIndexI+1);
+      leds[getIndex(getImgX(tmpIndexJ),getImgY(tmpIndexJ))].b = pgm_read_byte_near(gBeeFrames[gCurrentFrameNumber] + tmpIndexI+2);      
+      tmpIndexJ=tmpIndexJ+1;
+//      Serial.print(tmpIndexI);
+//      Serial.println("");
+    }
+    FastLED.show();
+    // insert a delay to keep the framerate modest
+    FastLED.delay(1000/FRAMES_PER_SECOND);
+  
+    nextFrame(2);
+  }
+}
+
+void doPlasma() {
+    Plasma plasma(leds, WIDTH, HEIGHT);
+    plasma.start();
+}
+
+void doSpiral() {
+    Spiral spiral(leds, WIDTH, HEIGHT);
+    spiral.start();
+}
+
+void loadImages() {
+  File dir = SD.open("/");
+  while (true) {
+    File entry =  dir.openNextFile();
+    if (!entry) {break;}
+    if (!entry.isDirectory() && entry.size() != 4096){
+      //Serial.print(entry.name()); Serial.print(" - "); Serial.println(entry.size(), DEC);
+      int bright = analogRead(1);
+      //Serial.println(bright);
+      int dim = map(bright, 0, 1023, 0, 255); //dimmer function
+      
+      Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
+      strip.begin();
+      strip.setBrightness(dim); //insert dimmer function
+      int counter = 0; //start at 0
+
+      while(entry.available()){
+        int inChar = entry.read();
+        if (isDigit(inChar)) {inString += (char)inChar;}
+        if (inChar == '\n') {
+          int32_t c = -inString.toInt();
+          inString = "";
+          strip.setPixelColor(counter, c);
+          counter++;
+        }
+      }
+      strip.show();
+      delay(5000); // This is how fast the arduino will cycle through the image
+    }
+    entry.close();
+  }
+  dir.close();
+}
